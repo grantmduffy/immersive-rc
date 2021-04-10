@@ -1,0 +1,19 @@
+
+
+[Report ID, Device Index, Sub ID, Parameters]
+
+Report ID:
+    0x10 - REP_ID_SHORT, 7 byte packet
+    0x11 - REP_ID_LONG,  20 byte packet
+    0x12 - REP_ID_VERY_LONG, 64 byte packet
+
+Device Index:
+    0x01 to 0xef - devices
+    0xff - receiver
+
+Message Sub ID:
+    0x00 to 0x7f - HID++ Reports / Notifications
+    0x80 to 0xff - Register Access
+    0x80 - SET_REGISTER, [0x10, device_index, 0x80, address, value(3 bytes)]
+    0x81 -
+
