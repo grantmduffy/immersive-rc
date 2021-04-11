@@ -1,12 +1,17 @@
 from time import sleep
 from pywinusb import hid
 import struct
+import math
 
 
 UINT16_RANGE = (0, 65535)
 INT16_RANGE = (-32768, 32767)
 UINT10_RANGE = (0, 1024)
 UINT8_RANGE = (0, 255)
+
+pad_directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'NONE']
+alpha_buttons = ['A', 'B', 'X', 'Y']
+aux_buttons = ['SIFT_UP', 'SHIFT_DOWN', 'MENU', 'WINDOW', 'RSB', 'LSB', 'XBOX', 'REVERSE']
 
 
 def float_to_int16(val):
@@ -51,9 +56,18 @@ class LogiWheel:
         self.out_long_device.close()
 
     def internal_callback(self, raw_data):
-        data = struct.unpack('bbbbHbbbx', bytearray(raw_data))
-        steering_angle = (2.0*data[4] / 65535) - 1
-        self.on_input(steering_angle)
+        data = struct.unpack('xBBBHBBBx', bytearray(raw_data))
+
+        self.on_input({
+            'steering': (2.0*data[-4] / UINT16_RANGE[1]) - 1,
+            'throttle': 1 - data[-3] / 255,
+            'brake': 1 - data[-2] / 255,
+            'clutch': 1 - data[-1] / 255,
+            'buttons': [x for i, x in enumerate(aux_buttons) if (1 << i) & data[1]] +
+                       [x for i, x in enumerate(alpha_buttons) if (1 << i) & (data[0] >> 4)],
+            'gear': int(math.log2(data[2])) + 1 if data[2] else 0,
+            'pad_dir': pad_directions[data[0] & 0b00001111]
+        })
 
     def set_degrees(self, degrees):
         packet = struct.pack('>4sH14x', b'\x11\xff\x0b\x6e', degrees)
@@ -69,18 +83,20 @@ class LogiWheel:
                              float_to_int16(fade_level), float_to_int16(fade_length))
         self.long_report.send(list(packet))
 
-    def spring_effect(self, left_coeff, left_sat, dead_band, center, right_coeff, right_sat, effect_id, auto_play=True):
+    def spring_effect(self, center, left_coeff, right_coeff, left_sat=1, right_sat=1, dead_band=0,
+                      effect_id=0, auto_play=True):
         if auto_play:
             effect = 0x86
         else:
             effect = 0x06
         packet = struct.pack('>4sBB4xhhhhhh42x', b'\x12\xff\x0b\x2e', effect_id, effect,
-                             float_to_int16(left_coeff), float_to_int16(left_sat),
+                             float_to_int16(left_sat), float_to_int16(left_coeff),
                              float_to_int16(dead_band), float_to_int16(center),
                              float_to_int16(right_coeff), float_to_int16(right_sat))
         self.long_report.send(list(packet))
 
-    def damping_effect(self, left_coeff, left_sat, dead_band, center, right_coeff, right_sat, effect_id, auto_play=True):
+    def damping_effect(self, center, left_coeff, right_coeff, left_sat=1, right_sat=1, dead_band=0,
+                      effect_id=0, auto_play=True):
         if auto_play:
             effect = 0x87
         else:
@@ -91,11 +107,11 @@ class LogiWheel:
                              float_to_int16(right_coeff), float_to_int16(right_sat))
         self.long_report.send(list(packet))
 
-    def stop_effect(self, effect_id):
+    def stop_effect(self, effect_id=0):
         packet = struct.pack('4sBB14x', b'\x11\xff\x0b\x3e', effect_id, 0x01)
         self.short_report.send(list(packet))
 
-    def play_effect(self, effect_id):
+    def play_effect(self, effect_id=0):
         packet = struct.pack('4sBB14x', b'\x11\xff\x0b\x3e', effect_id, 0x01)
         self.short_report.send(list(packet))
 
