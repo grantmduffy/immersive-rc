@@ -5,52 +5,70 @@
 #include <RF24.h>
 #include <printf.h>
 
-#define BUFF_SIZE 32
+#define IN_PACKET_SIZE 8
+#define OUT_PACKET_SIZE 12
 
-RF24 radio(7, 8); // CE, CSN
+#define CE_PIN 7
+#define CS_PIN 8
+
+#define BAUDRATE 115200
+//#define DEBUG 0
+
+RF24 radio(CE_PIN, CS_PIN);
 
 const uint64_t rx_addr = 0x0000000126;
 const uint64_t tx_addr = 0x0000000621;
 
-char message[BUFF_SIZE] = "Hello world!";
-char rx_message[BUFF_SIZE] = "";
-char *next_char = message;
-uint8_t i = 0;
+byte in_packet[IN_PACKET_SIZE];
+byte out_packet[OUT_PACKET_SIZE];
 
 void setup() {
-  Serial.begin(112500);
+  
   printf_begin();
+  Serial.begin(BAUDRATE);
+
+  #ifdef DEBUG
   while (!Serial.available()){}
+  #endif
+  
   radio.begin();
   radio.openReadingPipe(1, rx_addr);
   radio.openWritingPipe(tx_addr);
   radio.setPALevel(RF24_PA_MAX);
   radio.enableDynamicPayloads();
   radio.enableAckPayload();
-  radio.stopListening();
+
+  #ifdef DEBUG
   radio.printDetails();
-  Serial.println("Nano Ready");
+  #endif
+  
+  radio.stopListening();
 }
 
 void loop() {
-  if (Serial.available()){
-    char ch = Serial.read();
-    if (ch == '\r' || next_char == message + BUFF_SIZE - 1){
-      next_char = message;
-      Serial.print("Sent: ");
-      Serial.println(message);
-      radio.write(&message, strlen(message));
-    } else {
-      *next_char++ = ch;
-      *next_char = NULL;
-      Serial.print(message);
-      Serial.print('\r');
-    }
+  if (Serial.available() >= IN_PACKET_SIZE){
+    Serial.readBytes(in_packet, sizeof(in_packet));
+    radio.write(&in_packet, sizeof(in_packet));
+
+    #ifdef DEBUG
+    Serial.print("SENT:<");
+    Serial.write(in_packet, sizeof(in_packet));
+    Serial.println(">");
+    #endif
   }
   if (radio.available()){
-    radio.read(&message, sizeof(message));
-    Serial.print("Ack: ");
-    Serial.println(message);
+    
+    #ifdef DEBUG
+    Serial.print("RECIEVED:<");
+    #endif
+    
+    radio.read(&out_packet, sizeof(out_packet));
+    Serial.write(out_packet, sizeof(out_packet));
+    
+    #ifdef DEBUG
+    Serial.println(">");
+    #endif
+    
   }
   
 }

@@ -1,7 +1,13 @@
-from time import sleep
+# Reference:
+# https://github.com/jackun/logitech-ff/blob/master/hid-logitech-hidpp/hid-logitech-hidpp.c
+# https://opensource.logitech.com/opensource/images/c/ce/Logitech_Force_Feedback_Protocol_V1.5.pdf
+# file:///C:/Users/duffyg/Downloads/logitech_hidpp_2.0_specification_draft_2012-06-04.pdf
+
+
 from pywinusb import hid
 import struct
 import math
+from time import time, sleep
 
 
 UINT16_RANGE = (0, 65535)
@@ -18,6 +24,10 @@ def float_to_int16(val):
     return int(map_value(val, (-1, 1), INT16_RANGE))
 
 
+def float_to_uint16(val):
+    return int(map_value(val, (0, 1), UINT16_RANGE))
+
+
 def float_to_uint8(val):
     return int(map_value(val, (-1, 1), UINT8_RANGE))
 
@@ -32,32 +42,37 @@ def map_value(input, range_in, range_out):
 
 
 class LogiWheel:
+
     def __init__(self):
         self.VID = 0x046d
         self.PID = 0xc262
         devices = hid.HidDeviceFilter(vendor_id=0x046d, product_id=0xc262).get_devices()
-        self.input_dvice = devices[0]
+        self.input_device = devices[0]
         self.out_short_device = devices[1]
         self.out_long_device = devices[2]
         self.on_input = lambda x: print("Callback not set", x)
+        self.short_response = None
+        self.long_response = None
+        self.response_timout = 3.0
 
     def __enter__(self):
-        self.input_dvice.open()
+        self.input_device.open()
         self.out_short_device.open()
         self.out_long_device.open()
-        self.input_dvice.set_raw_data_handler(self.internal_callback)
+        self.input_device.set_raw_data_handler(self.internal_callback)
         self.short_report = self.out_short_device.find_output_reports()[0]
         self.long_report = self.out_long_device.find_output_reports()[0]
+        self.out_short_device.set_raw_data_handler(self.short_response_callback)
+        self.out_long_device.set_raw_data_handler(self.long_response_callback)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.input_dvice.close()
+        self.input_device.close()
         self.out_short_device.close()
         self.out_long_device.close()
 
     def internal_callback(self, raw_data):
         data = struct.unpack('xBBBHBBBx', bytearray(raw_data))
-
         self.on_input({
             'steering': (2.0*data[-4] / UINT16_RANGE[1]) - 1,
             'throttle': 1 - data[-3] / 255,
@@ -69,32 +84,72 @@ class LogiWheel:
             'pad_dir': pad_directions[data[0] & 0b00001111]
         })
 
-    def set_degrees(self, degrees):
-        packet = struct.pack('>4sH14x', b'\x11\xff\x0b\x6e', degrees)
-        self.short_report.send(list(packet))
+    def short_response_callback(self, data):
+        self.short_response = data
 
-    def contant_effect(self, force, attack_level, attack_length, fade_level, fade_length, effect_id, auto_play=True):
-        if auto_play:
-            effect = 0x80
-        else:
-            effect = 0x00
-        packet = struct.pack('>4sBBhBhBh50x', float_to_int16(effect_id), float_to_int16(effect),
-                             float_to_int16(force), float_to_int16(attack_level), float_to_int16(attack_length),
-                             float_to_int16(fade_level), float_to_int16(fade_length))
-        self.long_report.send(list(packet))
+    def long_response_callback(self, data):
+        self.long_response = data
 
+    def get_short_response(self):
+        t_start = time()
+        while time() - t_start > self.response_timout:
+            if self.short_response is not None:
+                data = self.short_response
+                self.short_response = None
+                return data
+        raise TimeoutError(f'Failed to get response in {self.response_timout}s')
+
+    def get_long_response(self):
+        t_start = time()
+        while time() - t_start < self.response_timout:
+            if self.long_response is not None:
+                data = self.long_response
+                self.long_response = None
+                return data
+        raise TimeoutError(f'Failed to get response in {self.response_timout}s')
+
+    def get_info(self):
+        response = self.send_packet(b'\x11\xff\x0b\x0e')
+        slot_count, actuator_mask = response[4], response[5]
+        return slot_count, actuator_mask
+
+    def constant_effect(self, force, effect_id=0, play=True):
+        effect_type = 0x00
+        if play:
+            effect_type |= 0x80
+        packet = struct.pack('>4sBB4xh8x', b'\x11\xff\x0b\x2e', effect_id, effect_type, float_to_int16(force))
+        response = self.send_packet(packet)
+        return response[4]
+
+    # TODO: get working
     def spring_effect(self, center, left_coeff, right_coeff, left_sat=1, right_sat=1, dead_band=0,
                       effect_id=0, auto_play=True):
         if auto_play:
             effect = 0x86
         else:
             effect = 0x06
-        packet = struct.pack('>4sBB4xhhhhhh42x', b'\x12\xff\x0b\x2e', effect_id, effect,
-                             float_to_int16(left_sat), float_to_int16(left_coeff),
+        packet = struct.pack('>4sBB4xHhhhhH', b'\x12\xff\x0b\x2e', effect_id, effect,
+                             float_to_uint16(left_sat), float_to_int16(left_coeff),
                              float_to_int16(dead_band), float_to_int16(center),
-                             float_to_int16(right_coeff), float_to_int16(right_sat))
-        self.long_report.send(list(packet))
+                             float_to_int16(right_coeff), float_to_uint16(right_sat))
+        response = self.send_packet(packet)
+        return response[4]
 
+    def reset_all_effects(self):
+        packet = b'\x11\xff\x0b\x1e'
+        self.send_packet(packet)
+
+    def set_effect_state(self, effect_id, state=0):
+        packet = struct.pack('4sBB', b'\x11\xff\x0b\x3e', effect_id, state)
+        response = self.send_packet(packet)
+        return response[5]
+
+    # OLD STUFF:
+    def set_degrees(self, degrees):
+        packet = struct.pack('>4sH14x', b'\x11\xff\x0b\x6e', degrees)
+        self.send_packet(packet)
+
+    # TODO: Get working
     def damping_effect(self, center, left_coeff, right_coeff, left_sat=1, right_sat=1, dead_band=0,
                       effect_id=0, auto_play=True):
         if auto_play:
@@ -107,18 +162,28 @@ class LogiWheel:
                              float_to_int16(right_coeff), float_to_int16(right_sat))
         self.long_report.send(list(packet))
 
-    def stop_effect(self, effect_id=0):
-        packet = struct.pack('4sBB14x', b'\x11\xff\x0b\x3e', effect_id, 0x01)
-        self.short_report.send(list(packet))
+    def send_packet(self, data):
+        self.long_response = None
+        if data[0] == 0x11:
+            data += b'\x00' * (20 - len(data))
+            self.short_report.send(data)
+        else:
+            data += b'\x00' * (64 - len(data))
+            self.long_report.send(data)
+        return self.get_long_response()
 
-    def play_effect(self, effect_id=0):
-        packet = struct.pack('4sBB14x', b'\x11\xff\x0b\x3e', effect_id, 0x01)
-        self.short_report.send(list(packet))
 
-    def reset_effects(self):
-        packet = struct.pack('4s16x', b'\x11\xff\x0b\x1e')
-        self.short_report.send(list(packet))
+if __name__ == '__main__':
+    with LogiWheel() as wheel:
+        def f(x):
+            pass
+        wheel.on_input = f
+        wheel.reset_all_effects()
+        id = wheel.constant_effect(1)
+        sleep(1)
+        wheel.constant_effect(-1, id)
+        sleep(1)
+        wheel.constant_effect(0, id)
+        print(wheel.set_effect_state(id))
 
-    def set_force(self, percent):  # percent of 0xffff
-        packet = struct.pack('4sH14x', b'\x11\xff\x0b\x8e', int(percent*65535))
-        self.short_report.send(list(packet))
+
