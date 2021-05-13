@@ -1,5 +1,5 @@
 from logiwheel import LogiWheel
-from time import sleep
+from time import sleep, time
 import struct
 import serial
 from threading import Thread
@@ -38,6 +38,8 @@ d = dict(
     buttons=[]
 )
 run = True
+packets_sent = 0
+packets_received = 0
 
 
 def update(data):
@@ -51,19 +53,35 @@ def update(data):
 
 def ser_thread():
     print('Serial thread starting')
-    global d, run
+    global d, run, packets_sent, packets_received
     with serial.Serial(ser_port, baudrate) as ser:
         sleep(2)
         while run:
             ser.write(struct.pack('ff', -steering_scale * d['steering'] - steering_offset + 0.5, d['throttle']))
-            d['force_feedback'], d['actual_steering_pos'], battery_level_raw, d['steering_force'] = struct.unpack('fHHf', ser.read(12))
-            d['battery_level'] = battery_level_raw / battery_scale
-            battery_history[:-1] = battery_history[1:]
-            battery_history[-1] = d['battery_level']
-            force_history[:-1] = force_history[1:]
-            force_history[-1] = d['force_feedback']
-            ser.flushInput()
+            packets_sent += 1
+            if ser.in_waiting >= 12:
+                d['force_feedback'], d['actual_steering_pos'], battery_level_raw, d['steering_force'] = struct.unpack('fHHf', ser.read(12))
+                d['battery_level'] = battery_level_raw / battery_scale
+                battery_history[:-1] = battery_history[1:]
+                battery_history[-1] = d['battery_level']
+                force_history[:-1] = force_history[1:]
+                force_history[-1] = d['force_feedback']
+                ser.flushInput()
+                packets_received += 1
             sleep(delay_time)
+
+
+def wheel_thread():
+    print('Wheel thread starting')
+    global d, run
+    with LogiWheel() as wheel:
+        wheel.on_input = update
+        wheel.reset_all_effects()
+        sleep(5)
+        const_id = wheel.constant_effect(0)
+        while run:
+            wheel.constant_effect(d['force_feedback'], const_id)
+            sleep(0.1)
 
 
 def animate(i):
@@ -73,13 +91,11 @@ def animate(i):
     return bat_line, force_line
 
 
-with LogiWheel() as wheel:
-    wheel.reset_all_effects()
-    wheel.set_degrees(900)
-    wheel.on_input = update
-    effect_id = wheel.constant_effect(0)
+if __name__ == '__main__':
 
     Thread(target=ser_thread).start()
+    Thread(target=wheel_thread).start()
+
     a = animation.FuncAnimation(plt.gcf(), animate, blit=True, interval=100)
     plt.show()
     run = False

@@ -175,12 +175,11 @@ class LogiWheel:
 
 if __name__ == '__main__':
     with LogiWheel() as wheel:
-        def f(x):
-            pass
-        wheel.on_input = f
+        wheel.on_input = lambda x: None
         wheel.reset_all_effects()
-        id = wheel.constant_effect(1)
         sleep(1)
+        id = wheel.constant_effect(1)
+        sleep(0.5)
         wheel.constant_effect(-1, id)
         sleep(1)
         wheel.constant_effect(0, id)
