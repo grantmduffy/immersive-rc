@@ -6,6 +6,9 @@ from threading import Thread
 from matplotlib import pyplot as plt
 from matplotlib import animation
 import numpy as np
+import cv2
+
+display_res = (1280, 960)
 
 ser_port = 'COM5'
 baudrate = 115200
@@ -71,6 +74,18 @@ def ser_thread():
             sleep(delay_time)
 
 
+def camera_thread():
+    global run
+    cap = cv2.VideoCapture(1)
+    while run:
+        ret, frame = cap.read()
+        display_frame = cv2.resize(frame, display_res)
+        cv2.imshow('FPV Camera', display_frame)
+        cv2.waitKey(1)
+        if cv2.getWindowProperty('FPV Camera', 0) != 0.0:
+            run = False
+
+
 def wheel_thread():
     print('Wheel thread starting')
     global d, run
@@ -87,7 +102,6 @@ def wheel_thread():
 def animate(i):
     bat_line.set_ydata(battery_history)
     force_line.set_ydata(force_history)
-    print(d['battery_level'], d['force_feedback'])
     return bat_line, force_line
 
 
@@ -95,6 +109,7 @@ if __name__ == '__main__':
 
     Thread(target=ser_thread).start()
     Thread(target=wheel_thread).start()
+    Thread(target=camera_thread).start()
 
     a = animation.FuncAnimation(plt.gcf(), animate, blit=True, interval=100)
     plt.show()
