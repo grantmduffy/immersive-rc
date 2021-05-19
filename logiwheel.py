@@ -17,7 +17,7 @@ UINT8_RANGE = (0, 255)
 
 pad_directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'NONE']
 alpha_buttons = ['A', 'B', 'X', 'Y']
-aux_buttons = ['SIFT_UP', 'SHIFT_DOWN', 'MENU', 'WINDOW', 'RSB', 'LSB', 'XBOX', 'REVERSE']
+aux_buttons = ['SHIFT_UP', 'SHIFT_DOWN', 'MENU', 'WINDOW', 'RSB', 'LSB', 'XBOX', 'REVERSE']
 
 
 def float_to_int16(val):
