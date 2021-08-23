@@ -9,8 +9,8 @@
 
 #define BATTERY_LEVEL_PIN 14
 #define STEERING_IN_PIN 15
-#define STEERING_A_PIN 5
-#define STEERING_B_PIN 6
+#define STEERING_B_PIN 5
+#define STEERING_A_PIN 6
 #define STEERING_PWM_PIN 7
 #define THROTTLE_PWM_PIN 8
 #define STEERING_PWM_FREQ 36621.09
@@ -42,12 +42,13 @@ union {
 
 union {
   struct {
+    char header[4];
     float force_feedback;
     uint16_t steering_position;
     uint16_t battery_level;
     float steering_force;
   } message;
-  byte buffer[12];
+  byte buffer[16];
 } out_packet;
 
 
@@ -59,6 +60,12 @@ void setup() {
 //  while (!Serial){}
   delay(2000);
   Serial.println("READY");
+
+//  memcpy("CAR-", out_packet.message.header, 4);
+  byte header[] = {'C', 'A', 'R', '-'};
+  for (int i = 0; i < 4; i++){
+    out_packet.message.header[i] = header[i];
+  }
 
   //  Setup pins/motors
   pinMode(BATTERY_LEVEL_PIN, INPUT);
@@ -84,6 +91,12 @@ void setup() {
   radio.printDetails();
   radio.startListening();
 
+  Serial.print('<');
+  for (int i = 0; i < sizeof(out_packet.buffer); i++){
+    Serial.write(out_packet.buffer[i]);
+  }
+  Serial.println('>');
+
   t = millis();
 }
 
@@ -92,6 +105,15 @@ void loop() {
   // Read from radio, send ack
   if (radio.available()){
     radio.read(&in_packet.buffer, sizeof(in_packet.buffer));
+//    Serial.print(out_packet.buffer[0]);
+    Serial.print('<');
+    for (int i = 0; i < 16; i++){
+      Serial.write(out_packet.buffer[i]);
+//      Serial.print(out_packet.buffer[i]);
+//      Serial.print(", ");
+    }
+//    Serial.write(out_packet.buffer, sizeof(out_packet.buffer));
+    Serial.println('>');
   }
 
   // Sample  
@@ -120,6 +142,7 @@ void loop() {
     out_packet.message.steering_position = analogRead(STEERING_IN_PIN);
     out_packet.message.battery_level = analogRead(BATTERY_LEVEL_PIN);
     radio.writeAckPayload(1, &out_packet.buffer, sizeof(out_packet.buffer));
+//    Serial.println(out_packet.message.battery_level);
   }
   
 }

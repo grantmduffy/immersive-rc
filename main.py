@@ -12,9 +12,12 @@ import pandas as pd
 
 display_res = (1280, 960)
 
-ser_port = 'COM5'
+ser_port = 'COM4'
 baudrate = 115200
 delay_time = 0.01
+in_header_format = '4s'
+in_time_format = 'L8x'
+in_car_format = 'fHHf'
 
 battery_scale = 412.63965
 steering_offset = 0.0
@@ -76,21 +79,29 @@ def update(data):
 
 def ser_thread():
     print('Serial thread starting')
-    global d, run, packets_sent, packets_received, new_lap, video_cap, lap_data
+    global d, run, packets_sent, packets_received, new_lap, video_cap, lap_data, lap_start_t, lap_i
     with serial.Serial(ser_port, baudrate) as ser:
         sleep(2)
         while run:
-            steering_input = -steering_scale * d['steering'] - steering_offset + 0.5
+            steering_input = steering_scale * d['steering'] - steering_offset + 0.5
             throttle_input = d['throttle'] ** throttle_gamma
             ser.write(struct.pack('ff', steering_input, throttle_input))
             packets_sent += 1
-            if ser.in_waiting >= 12:
-                d['force_feedback'], d['actual_steering_pos'], battery_level_raw, d['steering_force'] = struct.unpack('fHHf', ser.read(12))
-                d['battery_level'] = battery_level_raw / battery_scale
-                battery_history[:-1] = battery_history[1:]
-                battery_history[-1] = d['battery_level']
-                force_history[:-1] = force_history[1:]
-                force_history[-1] = d['force_feedback']
+            if ser.in_waiting >= struct.calcsize(in_header_format):
+                header = struct.unpack(in_header_format, ser.read(struct.calcsize(in_header_format)))[0]
+                if header == b'TIME':
+                    t, = struct.unpack(in_time_format, ser.read(struct.calcsize(in_time_format)))
+                    print(lap_i, t / 1000)
+                    lap_start_t = time()
+                    new_lap = True
+                else:
+                    d['force_feedback'], d['actual_steering_pos'], battery_level_raw, d['steering_force'] \
+                        = struct.unpack(in_car_format, ser.read(struct.calcsize(in_car_format)))
+                    d['battery_level'] = battery_level_raw / battery_scale
+                    battery_history[:-1] = battery_history[1:]
+                    battery_history[-1] = d['battery_level']
+                    force_history[:-1] = force_history[1:]
+                    force_history[-1] = d['force_feedback']
                 ser.flushInput()
                 packets_received += 1
 
@@ -127,14 +138,14 @@ def camera_thread():
 
 def wheel_thread():
     print('Wheel thread starting')
-    global d, run7
+    global d, run
     with LogiWheel() as wheel:
         wheel.on_input = update
         wheel.reset_all_effects()
         sleep(5)
         const_id = wheel.constant_effect(0)
         while run:
-            wheel.constant_effect(d['force_feedback'], const_id)
+            wheel.constant_effect(-d['force_feedback'], const_id)
             sleep(0.1)
 
 
@@ -147,8 +158,8 @@ def animate(i):
 if __name__ == '__main__':
 
     Thread(target=ser_thread).start()
-    # Thread(target=wheel_thread).start()
-    # Thread(target=camera_thread).start()
+    Thread(target=wheel_thread).start()
+    Thread(target=camera_thread).start()
 
     a = animation.FuncAnimation(plt.gcf(), animate, blit=True, interval=100)
     plt.show()
