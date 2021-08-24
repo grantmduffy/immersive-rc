@@ -13,6 +13,9 @@
 #define STEERING_A_PIN 6
 #define STEERING_PWM_PIN 7
 #define THROTTLE_PWM_PIN 8
+
+#define MIN_STEERING_VAL 4
+#define MAX_STEERING_VAL 4090
 #define STEERING_PWM_FREQ 36621.09
 #define THROTTLE_PWM_FREQ 10000.0
 
@@ -25,6 +28,8 @@ float err, err_1, f, f_1, y, y_1, y_2, u, u_1;
 float z = 30.0, p = 300.0, K = 10.0;
 float K_sys = 200.0;
 float lp_a = 0.2;
+
+float steering_val
 
 // Radio stuff
 RF24 radio(CE_PIN, CS_PIN);
@@ -169,5 +174,11 @@ void setSteeringForce(float force){  // force: [-1 -> 1]
 }
 
 float getSteeringPosition(){
-  return (float) analogRead(STEERING_IN_PIN) / 4095;
+  uint16_t raw_val = analogRead(STEERING_IN_PIN)
+  if ((raw_val < MIN_STEERING_VAL) | (raw_val > MAX_STEERING_VAL)){
+    return steering_val;
+  } else {
+    steering_val = (float) analogRead(STEERING_IN_PIN) / 4095;
+    return steering_val;
+  }
 }

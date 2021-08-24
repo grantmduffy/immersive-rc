@@ -51,6 +51,8 @@ packets_sent = 0
 packets_received = 0
 
 lap_data_path = Path.cwd() / 'data' / 'lap_data'
+if not lap_data_path.is_dir():
+    lap_data_path.mkdir()
 lap_i = max([int(p.name.replace('lap', '').replace('.avi', ''))
              for p in lap_data_path.iterdir() if '.avi' in p.name] + [-1])
 new_lap = False
@@ -110,7 +112,7 @@ def ser_thread():
                         video_cap.release()
                     new_lap = False
                     video_cap = cv2.VideoWriter(
-                        str(lap_data_path / f'lap{lap_i}.avi'),
+                        str(lap_data_path / f'lap{lap_i + 1}.avi'),
                         cv2.VideoWriter_fourcc(*'XVID'),
                         75.0,
                         (640, 480)
