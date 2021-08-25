@@ -117,7 +117,7 @@ def ser_thread():
                         75.0,
                         (640, 480)
                     )
-                    pd.DataFrame(data=lap_data, columns=lap_data_columns).to_csv(lap_data_path / f'lap{lap_i}.csv')
+                    pd.DataFrame(data=lap_data, columns=lap_data_columns).to_csv(lap_data_path / f'lap{lap_i}.csv', index=False)
                     lap_data = []
                 if video_cap is not None:
                     video_cap.write(current_frame)
