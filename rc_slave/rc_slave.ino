@@ -29,7 +29,7 @@ float z = 30.0, p = 300.0, K = 10.0;
 float K_sys = 200.0;
 float lp_a = 0.2;
 
-float steering_val
+float steering_val;
 
 // Radio stuff
 RF24 radio(CE_PIN, CS_PIN);
@@ -65,6 +65,7 @@ void setup() {
 //  while (!Serial){}
   delay(2000);
   Serial.println("READY");
+  in_packet.message.steering = 0.5;
 
 //  memcpy("CAR-", out_packet.message.header, 4);
   byte header[] = {'C', 'A', 'R', '-'};
@@ -174,7 +175,7 @@ void setSteeringForce(float force){  // force: [-1 -> 1]
 }
 
 float getSteeringPosition(){
-  uint16_t raw_val = analogRead(STEERING_IN_PIN)
+  uint16_t raw_val = analogRead(STEERING_IN_PIN);
   if ((raw_val < MIN_STEERING_VAL) | (raw_val > MAX_STEERING_VAL)){
     return steering_val;
   } else {

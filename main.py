@@ -9,6 +9,13 @@ import numpy as np
 import cv2
 from pathlib import Path
 import pandas as pd
+import torch
+from autonomous_model import Model
+from grants_model import ControllerModel as GrantsModel
+from lap_data import crop_and_scale
+
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 display_res = (1280, 960)
 
@@ -50,6 +57,13 @@ run = True
 packets_sent = 0
 packets_received = 0
 
+# device = 'cuda:0'
+device = 'cpu'
+buffer_res = (112, 112)
+buffer_size = 8
+frame_buffer = torch.zeros((1, 3, buffer_size, buffer_res[1], buffer_res[0]), device=device, dtype=torch.float)
+controls_buffer = torch.zeros((1, 2, buffer_size), device=device, dtype=torch.float)
+
 lap_data_path = Path.cwd() / 'data' / 'lap_data'
 if not lap_data_path.is_dir():
     lap_data_path.mkdir()
@@ -62,9 +76,13 @@ lap_data = []
 video_cap = None
 current_frame = np.zeros((480, 640, 3), np.uint8)
 
+autonomous_mode = False
+autonomous_steering = 0.0
+autonomous_throttle = 0.0
+
 
 def update(data):
-    global d, steering_offset, steering_scale, lap_start_t, lap_i, new_lap
+    global d, steering_offset, steering_scale, lap_start_t, lap_i, new_lap, autonomous_mode
     d.update(data)
     if 'RSB' in d['buttons']:
         steering_offset = -d['steering']
@@ -77,6 +95,10 @@ def update(data):
             lap_start_t = t
             lap_i += 1
             new_lap = True
+    if 'A' in d['buttons']:
+        autonomous_mode = True
+    if 'B' in d['buttons']:
+        autonomous_mode = False
 
 
 def ser_thread():
@@ -85,8 +107,21 @@ def ser_thread():
     with serial.Serial(ser_port, baudrate) as ser:
         sleep(2)
         while run:
-            steering_input = steering_scale * d['steering'] - steering_offset + 0.5
-            throttle_input = d['throttle'] ** throttle_gamma
+            if not autonomous_mode:
+                steering_input = steering_scale * d['steering'] - steering_offset + 0.5
+                throttle_input = d['throttle'] ** throttle_gamma
+            else:
+                steering_input = autonomous_steering
+                throttle_input = autonomous_throttle
+
+            # Update buffers
+            frame_buffer[:] = torch.roll(frame_buffer, 1, 2)
+            frame_buffer[0, :, 0] = torch.from_numpy(np.moveaxis(
+                crop_and_scale(current_frame, (112, 112)), -1, 0) / 255.0).to(torch.float)
+            controls_buffer[:] = torch.roll(controls_buffer, 1, 2)
+            controls_buffer[0, 0, 0] = steering_input
+            controls_buffer[0, 1, 0] = throttle_input
+
             ser.write(struct.pack('ff', steering_input, throttle_input))
             packets_sent += 1
             if ser.in_waiting >= struct.calcsize(in_header_format):
@@ -131,6 +166,8 @@ def camera_thread():
     cap = cv2.VideoCapture(1)
     while run:
         ret, frame = cap.read(current_frame)
+        if not ret:
+            continue
         display_frame = cv2.resize(frame, display_res)
         cv2.imshow('FPV Camera', display_frame)
         cv2.waitKey(1)
@@ -151,6 +188,19 @@ def wheel_thread():
             sleep(0.1)
 
 
+def inference_thread():
+    global frame_buffer, controls_buffer, autonomous_throttle, autonomous_steering
+    # model = Model().to(device)
+    model = GrantsModel().to(device)
+    print(model.load_state_dict(torch.load('weights.pt')))
+    while run:
+        # preds = model(frame_buffer)
+        preds = model(frame_buffer, controls_buffer)
+        autonomous_steering = min(max(preds[0, 0].item(), -1), 1)
+        autonomous_throttle = min(max(preds[0, 1].item(), 0), 1)
+        print('\r', preds, end='')
+
+
 def animate(i):
     bat_line.set_ydata(battery_history)
     force_line.set_ydata(force_history)
@@ -162,6 +212,7 @@ if __name__ == '__main__':
     Thread(target=ser_thread).start()
     Thread(target=wheel_thread).start()
     Thread(target=camera_thread).start()
+    Thread(target=inference_thread).start()
 
     a = animation.FuncAnimation(plt.gcf(), animate, blit=True, interval=100)
     plt.show()

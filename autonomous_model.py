@@ -19,17 +19,18 @@ class LambdaLayer(torch.nn.Module):
 
 class Model(pl.LightningModule):
 
-    def __init__(self):
+    def __init__(self, lr=1e-3):
         super().__init__()
         self.backbone = torchvision.models.video.r2plus1d_18(pretrained=False)
         self.backbone.fc = nn.Linear(512, 2)
         self.loss_func = nn.MSELoss()
+        self.lr = lr
 
     def forward(self, x):
         return self.backbone(x)
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-3)
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
     def step(self, batch, type='train'):
         frames, t, steering, throttle, force, bat = batch
@@ -62,14 +63,15 @@ if __name__ == '__main__':
     res = (112, 112)
     batch_size = 16
     num_workers = 4
-    epochs = 10
+    epochs = 100
+    lr = 1e-4
 
     train_ds = VideoDataset(split='train', n_frames=n_frames, res=res)
     val_ds = VideoDataset(split='val', n_frames=n_frames, res=res)
     train_dl = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
     val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers)
 
-    model = Model()
+    model = Model(lr=lr)
     trainer = pl.Trainer(gpus=[0], max_epochs=epochs)
 
     wandb.init(project='ai_rc', entity='grantmduffy')

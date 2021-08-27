@@ -36,12 +36,15 @@ def crop_and_scale(img, res=(640, 480), interpolation=cv2.INTER_CUBIC):
 class VideoDataset(Dataset):
 
     def __init__(self, split=None, n_frames=4, fps=70, res=(112, 112), clean=True,
-                 data_path=Path(__file__).parent / 'data' / 'lap_data', val_split=0.1):
+                 data_path=Path(__file__).parent / 'data' / 'lap_data', val_split=0.1,
+                 min_lap=190, max_lap=500):
         self.data_path = data_path
         self.split = split
         self.n_frames = n_frames
         self.fps = fps
         self.res = res
+        self.min_lap = min_lap
+        self.max_lap = max_lap
         index_path = data_path / 'index.csv'
         if index_path.exists() and not clean:
             self.index = pd.read_csv(index_path)
@@ -55,6 +58,8 @@ class VideoDataset(Dataset):
             self.index['split'] = np.random.choice(['train', 'val'], len(self.index), p=(1 - val_split, val_split))
             self.index['length'] = [get_video_props(data_path / f'lap{i}.avi')[2] for i in self.index['lap']]
             self.index = self.index[self.index['length'] != 0]
+            self.index = self.index[self.index['length'] >= min_lap]
+            self.index = self.index[self.index['length'] <= max_lap]
             self.index.to_csv(index_path, index=False)
         if split is not None:
             self.index = self.index[self.index['split'] == split]
