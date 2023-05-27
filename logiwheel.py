@@ -32,12 +32,11 @@ def float_to_uint8(val):
     return int(map_value(val, (-1, 1), UINT8_RANGE))
 
 
-def map_value(input, range_in, range_out):
+def map_value(input, range_in, range_out, limit=True):
     out = (input - range_in[0]) * (range_out[1] - range_out[0]) / (range_in[1] - range_in[0]) + range_out[0]
-    if out > range_out[1]:
-        out = range_out[1]
-    if out < range_out[0]:
-        out = range_out[0]
+    if limit:
+        out = min(out, range_out[1])
+        out = max(out, range_out[0])
     return out
 
 
