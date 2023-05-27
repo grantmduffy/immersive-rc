@@ -157,5 +157,9 @@ if __name__ == '__main__':
             t1 = perf_counter()
             packet_rate = 1 / (t1 - t0)
 
+            # stop if battery gets too low
+            if battery_level < 7.5:
+                run = False
+
             # print(f'\r{1 / (t1 - t0):7.2f}Hz', f'{steering_pos:5.3f}, steering={steering_pos:6.4f}, throttle={throttle_force:5.3}, bat={bat_val:.2f}V', end='    ')
             # sleep(1 / 60)
