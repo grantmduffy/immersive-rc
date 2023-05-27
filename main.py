@@ -1,171 +1,38 @@
-from logiwheel import LogiWheel
-from time import sleep, time
-import struct
+from logiwheel import LogiWheel, map_value
+from time import sleep, time, perf_counter
 import serial
-from threading import Thread
-from matplotlib import pyplot as plt
-from matplotlib import animation
+from serial.tools.list_ports import comports
+import struct
 import numpy as np
 import cv2
-from pathlib import Path
-import pandas as pd
-import torch
-from autonomous_model import Model
-from grants_model import ControllerModel as GrantsModel
-from lap_data import crop_and_scale
-
-import os
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+from threading import Thread
+from pywinusb import hid
 
 display_res = (1280, 960)
 
-ser_port = 'COM4'
-baudrate = 115200
-delay_time = 0.01
-in_header_format = '4s'
-in_time_format = 'L8x'
-in_car_format = 'fHHf'
+# Select COM port
+baudrate = 2000000
+available_ports = comports()
+if len(available_ports) == 0:
+    print('No COM ports available')
+    exit(1)
+elif len(available_ports) == 1:
+    port = available_ports[0].name
+else:
+    print('Available COM ports:')
+    print('\n'.join([x.name for x in available_ports]))
+    port = input('Which port would you like to use?')
+print(f'Connecting to {port}')
 
-battery_scale = 412.63965
-steering_offset = 0.0
-steering_scale = 1.3
-
-plot_n = 100
-battery_history = np.zeros(plot_n)
-force_history = np.zeros(plot_n)
-throttle_gamma = 0.6
-
-plt.figure()
-plt.subplot(211)
-bat_line, = plt.plot(battery_history)
-plt.plot([0, plot_n - 1], [7.4, 7.4], 'r')
-plt.ylim(7.0, 9.0)
-plt.subplot(212)
-force_line, = plt.plot(force_history)
-plt.ylim(-1.0, 1.0)
-
-d = dict(
-    steering=0.0,
-    throttle=0.0,
-    force_feedback=0.0,
-    actual_steering_pos=0.0,
-    battery_level=0.0,
-    steering_motor_force=0.0,
-    buttons=[]
-)
-run = True
-packets_sent = 0
-packets_received = 0
-
-# device = 'cuda:0'
-device = 'cpu'
-buffer_res = (112, 112)
-buffer_size = 8
-frame_buffer = torch.zeros((1, 3, buffer_size, buffer_res[1], buffer_res[0]), device=device, dtype=torch.float)
-controls_buffer = torch.zeros((1, 2, buffer_size), device=device, dtype=torch.float)
-
-lap_data_path = Path.cwd() / 'data' / 'lap_data'
-if not lap_data_path.is_dir():
-    lap_data_path.mkdir()
-lap_i = max([int(p.name.replace('lap', '').replace('.avi', ''))
-             for p in lap_data_path.iterdir() if '.avi' in p.name] + [-1])
-new_lap = False
-lap_start_t = time()
-lap_data_columns = ['Time', 'Steering', 'Throttle', 'Force Feedback', 'Battery Level']
-lap_data = []
-video_cap = None
-current_frame = np.zeros((480, 640, 3), np.uint8)
-
-autonomous_mode = False
-autonomous_steering = 0.0
-autonomous_throttle = 0.0
-
-
-def update(data):
-    global d, steering_offset, steering_scale, lap_start_t, lap_i, new_lap, autonomous_mode
-    d.update(data)
-    if 'RSB' in d['buttons']:
-        steering_offset = -d['steering']
-    if 'LSB' in d['buttons']:
-        steering_scale = 1 / abs(d['steering'])
-    if 'SHIFT_UP' in d['buttons']:
-        t = time()
-        if t - lap_start_t > 2.0:
-            print(lap_i, t - lap_start_t)
-            lap_start_t = t
-            lap_i += 1
-            new_lap = True
-    if 'A' in d['buttons']:
-        autonomous_mode = True
-    if 'B' in d['buttons']:
-        autonomous_mode = False
-
-
-def ser_thread():
-    print('Serial thread starting')
-    global d, run, packets_sent, packets_received, new_lap, video_cap, lap_data, lap_start_t, lap_i
-    with serial.Serial(ser_port, baudrate) as ser:
-        sleep(2)
-        while run:
-            if not autonomous_mode:
-                steering_input = steering_scale * d['steering'] - steering_offset + 0.5
-                throttle_input = d['throttle'] ** throttle_gamma
-            else:
-                steering_input = autonomous_steering
-                throttle_input = autonomous_throttle
-
-            # Update buffers
-            frame_buffer[:] = torch.roll(frame_buffer, 1, 2)
-            frame_buffer[0, :, 0] = torch.from_numpy(np.moveaxis(
-                crop_and_scale(current_frame, (112, 112)), -1, 0) / 255.0).to(torch.float)
-            controls_buffer[:] = torch.roll(controls_buffer, 1, 2)
-            controls_buffer[0, 0, 0] = steering_input
-            controls_buffer[0, 1, 0] = throttle_input
-
-            ser.write(struct.pack('ff', steering_input, throttle_input))
-            packets_sent += 1
-            if ser.in_waiting >= struct.calcsize(in_header_format):
-                header = struct.unpack(in_header_format, ser.read(struct.calcsize(in_header_format)))[0]
-                if header == b'TIME':
-                    t, = struct.unpack(in_time_format, ser.read(struct.calcsize(in_time_format)))
-                    print(lap_i, t / 1000)
-                    lap_start_t = time()
-                    new_lap = True
-                else:
-                    d['force_feedback'], d['actual_steering_pos'], battery_level_raw, d['steering_force'] \
-                        = struct.unpack(in_car_format, ser.read(struct.calcsize(in_car_format)))
-                    d['battery_level'] = battery_level_raw / battery_scale
-                    battery_history[:-1] = battery_history[1:]
-                    battery_history[-1] = d['battery_level']
-                    force_history[:-1] = force_history[1:]
-                    force_history[-1] = d['force_feedback']
-                ser.flushInput()
-                packets_received += 1
-
-                if new_lap:
-                    if video_cap is not None:
-                        video_cap.release()
-                    new_lap = False
-                    video_cap = cv2.VideoWriter(
-                        str(lap_data_path / f'lap{lap_i + 1}.avi'),
-                        cv2.VideoWriter_fourcc(*'XVID'),
-                        75.0,
-                        (640, 480)
-                    )
-                    pd.DataFrame(data=lap_data, columns=lap_data_columns).to_csv(lap_data_path / f'lap{lap_i}.csv', index=False)
-                    lap_data = []
-                if video_cap is not None:
-                    video_cap.write(current_frame)
-                    lap_data.append([time() - lap_start_t, steering_input,
-                                     throttle_input, d['force_feedback'], d['battery_level']])
-            sleep(delay_time)
-
+run = False
+camera = 0
 
 def camera_thread():
-    global run, current_frame
-    cap = cv2.VideoCapture(1)
+    global run
+    cap = cv2.VideoCapture(camera)
+    run = True
     while run:
-        ret, frame = cap.read(current_frame)
+        ret, frame = cap.read()
         if not ret:
             continue
         display_frame = cv2.resize(frame, display_res)
@@ -175,45 +42,93 @@ def camera_thread():
             run = False
 
 
-def wheel_thread():
-    print('Wheel thread starting')
-    global d, run
-    with LogiWheel() as wheel:
-        wheel.on_input = update
-        wheel.reset_all_effects()
-        sleep(5)
-        const_id = wheel.constant_effect(0)
-        while run:
-            wheel.constant_effect(-d['force_feedback'], const_id)
-            sleep(0.1)
+inputs = {'steering': 0.0, 'throttle': 0.0, 'clutch': 0.0, 'brake': 0.0}
+steering_pos = 0
+
+def input_callback(x):
+      global inputs
+      inputs = x
 
 
-def inference_thread():
-    global frame_buffer, controls_buffer, autonomous_throttle, autonomous_steering
-    # model = Model().to(device)
-    model = GrantsModel().to(device)
-    print(model.load_state_dict(torch.load('weights.pt')))
-    while run:
-        # preds = model(frame_buffer)
-        preds = model(frame_buffer, controls_buffer)
-        autonomous_steering = min(max(preds[0, 0].item(), -1), 1)
-        autonomous_throttle = min(max(preds[0, 1].item(), 0), 1)
-        print('\r', preds, end='')
-
-
-def animate(i):
-    bat_line.set_ydata(battery_history)
-    force_line.set_ydata(force_history)
-    return bat_line, force_line
+def controller_callback(vals):
+    global inputs
+    inputs['steering'] = map_value((vals[2] << 8) + vals[1], (1, 65535), (-1, 1))
+    throttle = (vals[4] << 8) + vals[3]
+    inputs['throttle'] = map_value(throttle, (0, 65534), (0, 1)) if throttle < 65534 else 0
+    # print(f'\r{(vals[2] << 8) + vals[1]:05d}|{(vals[4] << 8) + vals[3]:05d}', end='')
+    # print(f'\r{inputs["steering"]:.2f}|{inputs["throttle"]:.2f}', end='')
 
 
 if __name__ == '__main__':
 
-    Thread(target=ser_thread).start()
-    Thread(target=wheel_thread).start()
     Thread(target=camera_thread).start()
-    Thread(target=inference_thread).start()
 
-    a = animation.FuncAnimation(plt.gcf(), animate, blit=True, interval=100)
-    plt.show()
-    run = False
+    # for device in hid.find_all_hid_devices():
+    #     print(device)
+
+    # device = hid.HidDeviceFilter(vendor_id=0x1234, product_id=0xBEAD).get_devices()[0]
+    # device = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x0000).get_devices()[0]
+    device = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x028e).get_devices()[0]  # XBox 360 controller
+    device.open()
+    device.set_raw_data_handler(controller_callback)
+
+    # while True:
+    #     pass
+
+    # with LogiWheel() as wheel, serial.Serial(port, timeout=0.1, baudrate=baudrate) as ser:
+    with serial.Serial(port, timeout=0.1, baudrate=baudrate) as ser:
+
+        # wheel.on_input = input_callback
+
+        # read radio summary from arduino
+        while ser.in_waiting == 0: pass
+        sleep(1.0)
+        print('FROM ARDUINO:')
+        print(ser.read_all().decode('utf-8'))
+
+        while not run:
+            pass
+
+        # start sending packets
+        while run:
+            if inputs is None:
+                continue
+            t0 = perf_counter()
+
+            steering_input = map_value(inputs['steering'], (-0.5, 0.5), (-1, 1))
+            # steering_force = map_value(err, (-0.5, 0.5), (-1, 1))
+            throttle_force = inputs['throttle'] ** 0.5
+
+            # encode packet
+            packet = struct.pack(
+                'HHHHH22s',
+                int(round(map_value(inputs['brake'], (-1, 1), (2300, 20900)))) | (1 << 15),
+                int(round(map_value(inputs['clutch'], (0, 1), (2300, 20900)))) | (1 << 15),
+                int(round(map_value(throttle_force, (0, 1), (0, 1000)))),
+                # int(round(map_value(abs(steering_force), (0, 1), (0, 1000)))) | (1 << 15),
+                int(round(map_value(steering_input, (-1, 1), (500, 3600)))),
+                0,
+                b'Hello from Python!'
+            )
+            
+            # send to car
+            ser.write(packet)
+            response = ser.read(32)
+            if len(response) != 32:
+                print('PACKET FAILED', len(response))
+                continue
+            
+            echo = np.frombuffer(response[10:20], dtype=np.uint16)
+            message = response[20:]
+            if response[10:20] != packet[:10]:
+                print('CORRUPTED PACKET', np.frombuffer(packet[:10], np.uint16), echo)
+            if not response[20:].startswith(b'~running~'):
+                print('NRF RESTART', response[20:])
+            adc_vals = np.frombuffer(response[:10], dtype=np.int16)
+            steering_pos = adc_vals[3]
+            bat_val = map_value(adc_vals[4], (0, 2 ** 12), (0, 10.02), limit=False)
+
+            t1 = perf_counter()
+
+            print(f'\r{1 / (t1 - t0):7.2f}Hz', f'{steering_pos:5.3f}, steering={steering_pos:6.4f}, throttle={throttle_force:5.3}, bat={bat_val:.2f}V', end='    ')
+            # sleep(1 / 60)
