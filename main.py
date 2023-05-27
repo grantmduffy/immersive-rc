@@ -102,7 +102,7 @@ if __name__ == '__main__':
     print(f'Connecting to {port}')
 
     # with LogiWheel() as wheel, serial.Serial(port, timeout=0.1, baudrate=baudrate) as ser:
-    with serial.Serial(port, timeout=0.1, baudrate=baudrate) as ser:
+    with serial.Serial(port, timeout=0.1, baudrate=baud) as ser:
 
         # wheel.on_input = input_callback
 
