@@ -26,6 +26,8 @@ battery_level = 0
 
 run = False
 lap = False
+lap_start_time = 0
+last_lap_time = ''
 camera = config['camera']
 n_trace = 400
 trace_scale = 2
@@ -36,7 +38,7 @@ lines[..., 0] = np.arange(n_trace)[None, None, :] * trace_scale
 
 
 def write_frame(out, frame: np.ndarray, csv):
-    global inputs, frame_rate
+    global inputs, frame_rate, lap_start_time
     t = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     t_micros = datetime.now().strftime('%H-%M-%S.%f')
     if out is None:
@@ -47,6 +49,7 @@ def write_frame(out, frame: np.ndarray, csv):
         csv = Path(config['lap_video_path']) / f'{t}.csv'
         with open(csv, 'w') as f:
             f.write('time,steering,throttle,battery\n')
+        lap_start_time = datetime.now()
     out.write(frame)
     with open(csv, 'a') as f:
         f.write(','.join(str(x) for x in (t_micros, inputs['steering'], inputs['throttle'], battery_level)) + '\n')
@@ -55,7 +58,7 @@ def write_frame(out, frame: np.ndarray, csv):
 
 
 def camera_thread():
-    global run, lap, frame_rate, packet_rate, battery_level, trace_buffer
+    global run, lap, frame_rate, packet_rate, battery_level, trace_buffer, last_lap_time
     cap = cv2.VideoCapture(camera)
     vid_out = None
     csv_out = None
@@ -87,6 +90,9 @@ def camera_thread():
         display_frame = cv2.putText(display_frame, csv_out.name.replace('.csv', ''),
                                     (10, trace_height + 120), cv2.FONT_HERSHEY_COMPLEX, 
                                     1, (0, 0, 0), 2)
+        display_frame = cv2.putText(display_frame, last_lap_time,
+                                    (10, trace_height + 150), cv2.FONT_HERSHEY_COMPLEX, 
+                                    1, (0, 0, 0), 2)
 
         cv2.imshow('FPV Camera', display_frame)
         cv2.waitKey(1)
@@ -100,6 +106,7 @@ def camera_thread():
             vid_out = None
             csv_out = None
             lap = False
+            last_lap_time = str(datetime.now() - lap_start_time)
     
     if vid_out is not None:
         vid_out.release()
@@ -115,6 +122,8 @@ def controller_callback(vals):
     inputs['steering'] = map_value((vals[2] << 8) + vals[1], (1, 65535), (-1, 1))
     throttle = (vals[4] << 8) + vals[3]
     inputs['throttle'] = map_value(throttle, (0, 65534), (0, 1)) if throttle < 65534 else 0
+    if vals[11] & 1:
+        finish_lap()
 
 
 def get_port():
@@ -131,12 +140,12 @@ def get_port():
     return port
 
 
-def stop(_):
+def stop(_=None):
     global run
     run = False
 
 
-def finish_lap(_):
+def finish_lap(_=None):
     global lap
     lap = True
 
