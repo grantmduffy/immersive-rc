@@ -96,7 +96,11 @@ def camera_thread():
 
         cv2.imshow('FPV Camera', display_frame)
         cv2.waitKey(1)
-        if cv2.getWindowProperty('FPV Camera', 0) != 0.0:
+        try: 
+            if cv2.getWindowProperty('FPV Camera', 0) != 0.0:
+                run = False
+        except Exception as e:
+            # print(e)
             run = False
         t1 = perf_counter()
         frame_rate = 1 / (t1 - t0)
@@ -158,10 +162,12 @@ if __name__ == '__main__':
     keyboard.on_press_key('space', finish_lap)
     # camera_thread()
 
-    # device = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x0000).get_devices()[0]
-    device = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x028e).get_devices()[0]  # XBox 360 controller
-    device.open()
-    device.set_raw_data_handler(controller_callback)
+    devices = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x028e).get_devices()
+    if len(devices) > 0:
+        # device = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x0000).get_devices()[0]
+        device = hid.HidDeviceFilter(vendor_id=0x045e, product_id=0x028e).get_devices()[0]  # XBox 360 controller
+        device.open()
+        device.set_raw_data_handler(controller_callback)
 
     # connect serial
     port = get_port()
